@@ -27,10 +27,6 @@ import org.apache.spark.mllib.regression.LabeledPoint
 import org.apache.spark.rdd.RDD
 import org.apache.spark.SparkContext
 
-/**
- * MXNet Training On Spark
- * @author Yizhi Liu
- */
 class MXNet extends Serializable {
   private val logger: Logger = LoggerFactory.getLogger(classOf[MXNet])
   private val params: MXNetParams = new MXNetParams
@@ -105,7 +101,7 @@ class MXNet extends Serializable {
     this
   }
 
-  private def startParameterServers(
+  private def startSchedulerAndPSServers(
       schedulerIP: String,
       schedulerPort: Int,
       sc: SparkContext): ParameterServer = {
@@ -154,7 +150,7 @@ class MXNet extends Serializable {
     model
   }
 
-  private def setupKVStore(schedulerIP: String, schedulerPort: Int): KVStore = {
+  private def setupPSWorker(schedulerIP: String, schedulerPort: Int): KVStore = {
     KVStoreServer.init(ParameterServer.buildEnv(role = "worker",
       rootUri = schedulerIP, rootPort = schedulerPort,
       numServer = params.numServer,
@@ -170,11 +166,11 @@ class MXNet extends Serializable {
     kv.dispose()
   }
 
-  private def trainModel(
+  private[spark] def buildDistributedMxNetModels(
       trainData: RDD[LabeledPoint],
       schedulerIP: String,
-      schedulerPort: Int): MXNetModel = {
-    val job = trainData.mapPartitions { partition =>
+      schedulerPort: Int): RDD[MXNetModel] = {
+    trainData.mapPartitions { partition =>
       val dataIter = new LabeledPointIter(
         partition, params.dimension,
         params.batchSize,
@@ -193,7 +189,7 @@ class MXNet extends Serializable {
       logger.info("Batch {}", params.batchSize)
       // give enough time for ps-lite to detect the dead nodes
       Thread.sleep(20000)
-      val kv = setupKVStore(schedulerIP, schedulerPort)
+      val kv = setupPSWorker(schedulerIP, schedulerPort)
       val optimizer = new SGD(learningRate = 0.01f, momentum = 0.9f, wd = 0.00001f)
       val model = setFeedForwardModel(optimizer, numExamples, kv, dataIter)
       logger.info("Training finished, waiting for other workers ...")
@@ -202,9 +198,18 @@ class MXNet extends Serializable {
         model, params.dimension, params.batchSize,
         dataName = params.dataName, labelName = params.labelName))
     }.cache()
+  }
+
+  private def trainModel(
+      trainData: RDD[LabeledPoint],
+      schedulerIP: String,
+      schedulerPort: Int): MXNetModel = {
+    val distributedModelAPIs = buildDistributedMxNetModels(trainData, schedulerIP, schedulerPort)
     // force job to run
-    job.foreachPartition(() => _)
-    job.first()
+    distributedModelAPIs.foreachPartition(() => _)
+    val mxNetModel = distributedModelAPIs.first()
+    distributedModelAPIs.unpersist(false)
+    mxNetModel
   }
 
   def fit(data: RDD[LabeledPoint]): MXNetModel = {
@@ -212,20 +217,15 @@ class MXNet extends Serializable {
     // distribute native jars
     params.jars.foreach(jar => sc.addFile(jar))
     val trainData = {
-      if (params.numWorker > data.partitions.length) {
-        logger.info("repartitioning training set to {} partitions", params.numWorker)
+      if (params.numWorker != data.partitions.length) {
         data.repartition(params.numWorker)
-      } else if (params.numWorker < data.partitions.length) {
-        logger.info("repartitioning training set to {} partitions", params.numWorker)
-        data.coalesce(params.numWorker)
       } else {
         data
       }
     }
     val schedulerIP = utils.Network.ipAddress
     val schedulerPort = utils.Network.availablePort
-    val scheduler = startParameterServers(schedulerIP, schedulerPort, sc)
-    // simply the first model
+    val scheduler = startSchedulerAndPSServers(schedulerIP, schedulerPort, sc)
     val mxModel = trainModel(trainData, schedulerIP, schedulerPort)
     logger.info("Waiting for scheduler ...")
     scheduler.waitFor()

@@ -22,20 +22,18 @@ import ml.dmlc.mxnet.{FeedForward, NDArray, Shape}
 import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg.Vector
 
-/**
- * Wrapper for [[ml.dmlc.mxnet.Model]] which used in Spark application
- * @author Yizhi Liu
- */
 class MXNetModel private[mxnet](
     @transient private var model: FeedForward,
     private val dimension: Shape,
     private val batchSize: Int,
     private val dataName: String = "data",
     private val labelName: String = "label") extends Serializable {
+
   require(model != null, "try to serialize an empty FeedForward model")
   require(dimension != null, "unknown dimension")
   require(batchSize > 0, s"invalid batchSize: $batchSize")
-  val serializedModel = model.serialize()
+
+  private val serializedModel = model.serialize()
 
   /**
    * Get inner model [[FeedForward]]

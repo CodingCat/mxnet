@@ -72,7 +72,7 @@ fi
 
 HOST=`hostname`
 
-$SPARK_HOME/bin/spark-submit --master spark://$HOST:7077 \
+$SPARK_HOME/bin/spark-submit --master spark://Nans-MacBook-Pro.local:7077 \
   --class ml.dmlc.mxnet.spark.example.ClassificationExample \
   ${SPARK_OPTS} \
   ${SPARK_JAR} \

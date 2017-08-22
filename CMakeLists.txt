@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.0.2)
 
+SET(CMAKE_C_COMPILER /Users/nanzhu/code/clang+llvm-4.0.1-x86_64/bin/clang)
+SET(CMAKE_CXX_COMPILER /Users/nanzhu/code/clang+llvm-4.0.1-x86_64/bin/clang++)
+set(OpenMP_C_FLAGS -fopenmp)
+set(OpenMP_CXX_FLAGS -fopenmp)
+SET(USE_CUDA OFF)
+SET(USE_DIST_KVSTORE ON)
+
 project(mxnet C CXX)
 
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/build/private/local_config.cmake)
@@ -144,6 +151,8 @@ include_directories("cub")
 include_directories("nnvm/include")
 include_directories("dmlc-core/include")
 include_directories("dlpack/include")
+include_directories("ps-lite")
+include_directories("ps-lite/include")
 
 # commented out until PR goes through
 #if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/dlpack)
