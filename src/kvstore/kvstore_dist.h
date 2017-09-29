@@ -51,7 +51,7 @@ class KVStoreDist : public KVStoreLocal {
   explicit KVStoreDist(bool use_device_comm)
       : KVStoreLocal(use_device_comm), ps_worker_(nullptr), server_(nullptr) {
     if (IsWorkerNode()) {
-      ps_worker_ = new ps::KVWorker<real_t>(0);
+      ps_worker_ = new ps::KVWorker<real_t>(GetNewAppId());
       ps::StartAsync("mxnet\0");
       if (!ps::Postoffice::Get()->is_recovery()) {
         ps::Postoffice::Get()->Barrier(
@@ -514,6 +514,31 @@ class KVStoreDist : public KVStoreLocal {
     auto last = std::unique(keys_copy.begin(), keys_copy.end());
     CHECK_EQ(static_cast<size_t>(std::distance(keys_copy.begin(), last)),
              static_cast<size_t>(keys.size()));
+  }
+
+  /**
+   * \brief struct for ps keys and lens
+   */
+  struct PSKV {
+    ps::SArray<ps::Key> keys;  // n keys
+    ps::SArray<int> lens;  // the length of the i-th value
+    int size;
+  };
+
+  /**
+   * \brief cache all key partitions
+   */
+  std::unordered_map<int, PSKV> ps_kv_;
+
+  /**
+   * \brief serizelize EncodeRowSparseKey and EncodeKey
+   */
+  std::mutex mu_;
+
+  static std::atomic<int> app_id;
+
+  int GetNewAppId() {
+    return app_id++;
   }
 
   /**
