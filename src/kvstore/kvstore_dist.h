@@ -570,6 +570,31 @@ class KVStoreDist : public KVStoreLocal {
   }
 
   /**
+   * \brief struct for ps keys and lens
+   */
+  struct PSKV {
+    ps::SArray<ps::Key> keys;  // n keys
+    ps::SArray<int> lens;  // the length of the i-th value
+    int size;
+  };
+
+  /**
+   * \brief cache all key partitions
+   */
+  std::unordered_map<int, PSKV> ps_kv_;
+
+  /**
+   * \brief serizelize EncodeRowSparseKey and EncodeKey
+   */
+  std::mutex mu_;
+
+  static std::atomic<int> app_id;
+
+  int GetNewAppId() {
+    return app_id++;
+  }
+
+  /**
    * \brief convert to keys in ps
    */
   inline PSKV& EncodeDefaultKey(int key, size_t size, bool is_push) {
