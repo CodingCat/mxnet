@@ -565,8 +565,6 @@ class KVStoreDist : public KVStoreLocal {
     return customer_id++;
   }
 
-  // static int app_id;
-
   /**
    * \brief convert to keys in ps
    */
