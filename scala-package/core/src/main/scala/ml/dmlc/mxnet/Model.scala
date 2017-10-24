@@ -167,6 +167,7 @@ object Model {
       kvStore.init(name, argParams(paramNames(idx)))
       if (updateOnKVStore) {
         kvStore.pull(name, paramOnDevs, -idx)
+        println(s"pull $name")
       }
     }
   }
@@ -276,6 +277,8 @@ object Model {
 
     kvStore.foreach(initializeKVStore(_, executorManager.paramArrays,
       argParams, executorManager.paramNames, updateOnKVStore))
+
+    /*
     if (updateOnKVStore) {
       kvStore.foreach(_.setOptimizer(optimizer))
     }
@@ -359,6 +362,7 @@ object Model {
     }
 
     updaterLocal.dispose()
+    */
     executorManager.dispose()
   }
   // scalastyle:on parameterNum

@@ -476,6 +476,8 @@ class KVStoreDistServer {
       NDArray recved = NDArray(recv_blob, 0);
       if (stored.is_none()) {
         // initialization
+        std::cout << "initialized " << key << " from customer " << \
+          req_meta.customer_id << "\n";
         stored = NDArray(dshape, Context());
         CopyFromTo(recved, &stored, 0);
         server->Response(req_meta);
@@ -503,7 +505,17 @@ class KVStoreDistServer {
         stored.WaitToRead();
       }
     } else {
-      DefaultStorageResponse(key, stored, req_meta, req_data, server);
+      // pull
+      ps::KVPairs<real_t> response;
+      std::cout << "pull request of " << key << " from customer " << \
+          req_meta.customer_id << "\n";
+      CHECK(!stored.is_none()) << "init " << key << " first";
+      auto len = stored.shape().Size();
+      response.keys = req_data.keys;
+      response.lens = {len};
+      // TODO(mli) try to remove this CopyFrom
+      response.vals.CopyFrom(static_cast<const float*>(stored.data().dptr_), len);
+      server->Response(req_meta, response);
     }
   }
 

@@ -51,8 +51,10 @@ class KVStoreDist : public KVStoreLocal {
   explicit KVStoreDist(bool use_device_comm)
       : KVStoreLocal(use_device_comm), ps_worker_(nullptr), server_(nullptr) {
     if (IsWorkerNode()) {
-      ps_worker_ = new ps::KVWorker<real_t>(GetNewAppId());
-      ps::StartAsync("mxnet\0");
+      int new_customer_id = GetNewCustomerId();
+      ps_worker_ = new ps::KVWorker<real_t>(0, new_customer_id);
+      std::cout << "started kvworker in kvstoredist\n";
+      ps::StartAsync(new_customer_id, "mxnet\0");
       if (!ps::Postoffice::Get()->is_recovery()) {
         ps::Postoffice::Get()->Barrier(
           ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
@@ -121,13 +123,17 @@ class KVStoreDist : public KVStoreLocal {
   }
 
   void RunServer(const Controller& controller) override {
+    std::cout<<"+" << ps::Environment::Get()->find("DMLC_ROLE") << "\n";
     CHECK(!IsWorkerNode());
     if (IsServerNode()) {
+      std::cout<<"this is a server node\n";
       server_ = new KVStoreDistServer();
       server_->set_controller(controller);
+    } else {
+      std::cout<<ps::Environment::Get()->find("DMLC_ROLE") << "\n";
     }
 
-    ps::StartAsync("mxnet_server\0");
+    ps::StartAsync(0, "mxnet_server\0");
     if (!ps::Postoffice::Get()->is_recovery()) {
       ps::Postoffice::Get()->Barrier(
         ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
@@ -179,7 +185,9 @@ class KVStoreDist : public KVStoreLocal {
     for (size_t i = 0; i < keys.size(); ++i) {
       comm_->Init(keys[i], values[i].storage_type(), values[i].shape(), values[i].dtype());
     }
-    if (get_rank() == 0) {
+    int my_rank = get_rank();
+    if (my_rank == 0) {
+      std::cout << "update keys since rank is " << my_rank << "\n";
       Push_(keys, values, 0, false);
       // wait until the push is finished
       for (const int key : keys) {
@@ -188,6 +196,7 @@ class KVStoreDist : public KVStoreLocal {
       }
     } else {
       // do nothing
+      std::cout << "do not update keys since rank is " << my_rank << "\n";
     }
     if (!ps::Postoffice::Get()->is_recovery()) {
       Barrier();
@@ -535,13 +544,11 @@ class KVStoreDist : public KVStoreLocal {
    */
   std::mutex mu_;
 
-  static std::atomic<int> app_id;
+  static std::atomic<int> customer_id;
 
-  int GetNewAppId() {
-    return app_id++;
+  int GetNewCustomerId() {
+    return customer_id++;
   }
-
-  // static int app_id;
 
   /**
    * \brief convert to keys in ps

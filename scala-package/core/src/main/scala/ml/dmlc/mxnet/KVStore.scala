@@ -90,6 +90,7 @@ class KVStore(private[mxnet] val handle: KVStoreHandle) {
   }
 
   def init(key: String, value: NDArray): Unit = {
+    println(s"init $key")
     init(Array(key), Array(value))
   }
 
