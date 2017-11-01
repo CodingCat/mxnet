@@ -817,9 +817,6 @@ class KVStoreDist : public KVStoreLocal {
   bool log_verbose_;
 };
 
-std::mutex KVStoreDist::init_mutex;
-std::unordered_set<int> KVStoreDist::initialized_keys;
-
 }  // namespace kvstore
 }  // namespace mxnet
 
