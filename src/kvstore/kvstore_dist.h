@@ -207,6 +207,35 @@ class KVStoreDist : public KVStoreLocal {
         compr_buf_[key].WaitToWrite();
       }
     }
+    /*
+    if (init_mutex.try_lock()) {
+      CheckUnique(keys);
+      std::vector<int> uninitialized_keys;
+      std::vector<NDArray> uninitialized_values;
+      for (size_t i = 0; i < keys.size(); i++) {
+        if (initialized_keys.find(keys[i]) == initialized_keys.end()) {
+          uninitialized_keys.push_back(keys[i]);
+          uninitialized_values.push_back(values[i]);
+        }
+      }
+      for (size_t i = 0; i < uninitialized_keys.size(); ++i) {
+        comm_->Init(uninitialized_keys[i], uninitialized_values[i].storage_type(), \
+       uninitialized_values[i].shape(), uninitialized_values[i].dtype());
+      }
+      std::cout << "uninitialized keys length " << uninitialized_keys.size() << "\n";
+      if (uninitialized_keys.size() > 0) {
+        Push_(uninitialized_keys, uninitialized_values, 0, false);
+        std::cout << "pushed and waiting \n";
+        // wait until the push is finished
+        for (const auto &v : uninitialized_values) {
+          v.WaitToWrite();
+        }
+        initialized_keys.insert(uninitialized_keys.begin(), uninitialized_keys.end());
+        std::cout << "updated initialized_keys\n";
+      }
+      init_mutex.unlock();
+    }
+    */
     if (!ps::Postoffice::Get()->is_recovery()) {
       Barrier();
     }
@@ -554,9 +583,10 @@ class KVStoreDist : public KVStoreLocal {
    */
   std::unordered_map<int, PSKV> ps_kv_;
 
+
   /**
-   * \brief serizelize EncodeRowSparseKey and EncodeKey
-   */
+  * \brief serizelize EncodeRowSparseKey and EncodeKey
+  */
   std::mutex mu_;
 
   static std::atomic<int> customer_id;
@@ -786,6 +816,9 @@ class KVStoreDist : public KVStoreLocal {
   std::unordered_map<int, NDArray> residual_;
   bool log_verbose_;
 };
+
+std::mutex KVStoreDist::init_mutex;
+std::unordered_set<int> KVStoreDist::initialized_keys;
 
 }  // namespace kvstore
 }  // namespace mxnet
