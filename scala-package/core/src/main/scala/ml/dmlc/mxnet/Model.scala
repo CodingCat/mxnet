@@ -179,11 +179,14 @@ object Model {
                                            paramNames: IndexedSeq[String]): Unit = {
     (paramArrays zip gradArrays).zipWithIndex.foreach { case ((argList, gradList), index) =>
       if (gradList != null) {
+        println(s"updating params on kvstore")
         val name = paramNames(index)
         // push gradient, priority is negative index
         kvStore.foreach(_.push(name, gradList, -index))
         // pull back the weights
         kvStore.foreach(_.pull(name, argList, -index))
+      } else {
+        println(s"gradList is null")
       }
     }
   }
@@ -278,7 +281,6 @@ object Model {
     kvStore.foreach(initializeKVStore(_, executorManager.paramArrays,
       argParams, executorManager.paramNames, updateOnKVStore))
 
-    /*
     if (updateOnKVStore) {
       kvStore.foreach(_.setOptimizer(optimizer))
     }
@@ -362,7 +364,6 @@ object Model {
     }
 
     updaterLocal.dispose()
-    */
     executorManager.dispose()
   }
   // scalastyle:on parameterNum

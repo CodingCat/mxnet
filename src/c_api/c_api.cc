@@ -301,6 +301,7 @@ int MXNDArrayWaitToWrite(NDArrayHandle handle) {
 int MXNDArrayWaitAll() {
   API_BEGIN();
   Engine::Get()->WaitForAll();
+  std::cout << "jump out from waitForAll\n";
   API_END();
 }
 
