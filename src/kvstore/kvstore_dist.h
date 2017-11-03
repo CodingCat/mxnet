@@ -67,6 +67,7 @@ class KVStoreDist : public KVStoreLocal {
   virtual ~KVStoreDist() {
     std::cout << "deleting KVStoreDist in "<< IsWorkerNode() << "\n";
     Engine::Get()->WaitForAll();
+    std::cout << "jumped out from KVStoreDist\n";
     if (IsWorkerNode()) {
       std::cout << "jumped out from KVStoreDist\n";
       if (barrier_before_exit_) {
