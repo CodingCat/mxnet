@@ -206,8 +206,10 @@ class KVStore(private[mxnet] val handle: KVStoreHandle) {
     if (`type`.contains("dist") && isWorker.value != 0) {
       val optSerialized = Serializer.getSerializer.serialize(optimizer)
       val cmd = Serializer.encodeBase64String(optSerialized)
+      println(s"sered optimizer to server ${Thread.currentThread().getName}")
       logger.debug("Send optimizer to server: {}", cmd)
       sendCommandToServers(0, cmd)
+      println(s"sent command to server ${Thread.currentThread().getName}")
     } else {
       setUpdater(Optimizer.getUpdater(optimizer))
     }
