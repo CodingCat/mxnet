@@ -197,8 +197,11 @@ class MXNet extends Serializable {
 
   private def reclaimResources(dataIter: LabeledPointIter, kv: KVStore): Unit = {
     dataIter.dispose()
+    println("disposed data array")
     kv.setBarrierBeforeExit(true)
+    println("set Barrier")
     kv.dispose()
+    println("disposed kv")
   }
 
   private def trainModel(

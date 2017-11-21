@@ -167,6 +167,7 @@ object Model {
       kvStore.init(name, argParams(paramNames(idx)))
       if (updateOnKVStore) {
         kvStore.pull(name, paramOnDevs, -idx)
+        println(s"pull $name")
       }
     }
   }
@@ -178,11 +179,14 @@ object Model {
                                            paramNames: IndexedSeq[String]): Unit = {
     (paramArrays zip gradArrays).zipWithIndex.foreach { case ((argList, gradList), index) =>
       if (gradList != null) {
+        println(s"updating params on kvstore ${Thread.currentThread().getName}")
         val name = paramNames(index)
         // push gradient, priority is negative index
         kvStore.foreach(_.push(name, gradList, -index))
         // pull back the weights
         kvStore.foreach(_.pull(name, argList, -index))
+      } else {
+        println(s"gradList is null")
       }
     }
   }
@@ -258,6 +262,7 @@ object Model {
                                       workLoadList: Seq[Float] = Nil,
                                       monitor: Option[Monitor] = None,
                                       symGen: SymbolGenerator = null): Unit = {
+    println(s"training in ${Thread.currentThread().getName}")
     val executorManager = new DataParallelExecutorManager(
         symbol = symbol,
         symGen = symGen,
@@ -274,10 +279,16 @@ object Model {
     // updater for updateOnKVStore = false
     val updaterLocal = Optimizer.getUpdater(optimizer)
 
+    println(s"get updater local ${Thread.currentThread().getName}")
+
     kvStore.foreach(initializeKVStore(_, executorManager.paramArrays,
       argParams, executorManager.paramNames, updateOnKVStore))
+
+    println(s"initialized kv store ${Thread.currentThread().getName}")
+
     if (updateOnKVStore) {
       kvStore.foreach(_.setOptimizer(optimizer))
+      println(s"set optimizer in ${Thread.currentThread().getName}")
     }
 
     // Now start training

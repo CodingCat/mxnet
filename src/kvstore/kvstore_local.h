@@ -345,6 +345,7 @@ class KVStoreLocal : public KVStore {
       auto &str_key = str_keys[i];
       CHECK(str_key_dict_.find(str_key) != str_key_dict_.end())
             << "key " << str_key << " doesn't exist. Did you init?";
+      std::cout << "find " << str_key << " as index " << str_key_dict_[str_key] << "\n";
       keys->at(i) = str_key_dict_[str_key];
     }
   }
