@@ -56,7 +56,7 @@ KVStore* KVStore::Create(const char *type_name) {
     if (!has("_async") && kv->IsWorkerNode() && kv->get_rank() == 0) {
       // configure the server to be the sync mode
       std::cout << "sending data to servers\n";
-      kv->SendCommandToServers(kvstore::kSyncMode, "");
+      kv->SendCommandToServers(static_cast<int>(kvstore::CommandType::kSyncMode), "");
     }
 #else
     LOG(FATAL) << "compile with USE_DIST_KVSTORE=1 to use " << tname;
