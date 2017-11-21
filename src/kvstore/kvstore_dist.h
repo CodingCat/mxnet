@@ -67,11 +67,12 @@ class KVStoreDist : public KVStoreLocal {
   virtual ~KVStoreDist() {
     std::cout << "deleting KVStoreDist\n";
     Engine::Get()->WaitForAll();
-    std::cout << "jumped out from KVStoreDist\n";
     if (IsWorkerNode()) {
+      std::cout << "jumped out from KVStoreDist\n";
       if (barrier_before_exit_) {
         Barrier();
-        if (get_rank() == 0) {
+        if (get_rank() == 0 && ps_worker_->get_customer()->customer_id() == 0) {
+          std::cout << "send stop command to server" << "\n";
           // stop the executor at servers
           SendCommandToServers(static_cast<int>(CommandType::kStopServer), "");
         }
