@@ -57,7 +57,7 @@ class KVStoreDist : public KVStoreLocal {
       ps::StartAsync(new_customer_id, "mxnet\0");
       if (!ps::Postoffice::Get()->is_recovery()) {
         ps::Postoffice::Get()->Barrier(
-          ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
+          new_customer_id, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
       }
     }
     bigarray_bound_ = dmlc::GetEnv("MXNET_KVSTORE_BIGARRAY_BOUND", 1000 * 1000);
@@ -65,7 +65,7 @@ class KVStoreDist : public KVStoreLocal {
   }
 
   virtual ~KVStoreDist() {
-    std::cout << "deleting KVStoreDist\n";
+    std::cout << "deleting KVStoreDist in "<< IsWorkerNode() << "\n";
     Engine::Get()->WaitForAll();
     if (IsWorkerNode()) {
       std::cout << "jumped out from KVStoreDist\n";
@@ -80,6 +80,7 @@ class KVStoreDist : public KVStoreLocal {
       ps::Finalize(barrier_before_exit_);
       delete ps_worker_;
     }
+    std::cout << "finished kvstore dist \n";
   }
 
   void set_updater(const Updater& updater) override {
@@ -101,7 +102,9 @@ class KVStoreDist : public KVStoreLocal {
   }
 
   void Barrier() override {
-    ps::Postoffice::Get()->Barrier(ps::kWorkerGroup);
+    ps::Postoffice::Get()->Barrier(
+      ps_worker_->get_customer()->customer_id(),
+      ps::kWorkerGroup);
   }
 
   void SendCommandToServers(int cmd_id,
@@ -139,13 +142,14 @@ class KVStoreDist : public KVStoreLocal {
     ps::StartAsync(0, "mxnet_server\0");
     if (!ps::Postoffice::Get()->is_recovery()) {
       ps::Postoffice::Get()->Barrier(
-        ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
+        0, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
     }
     if (server_) server_->Run();
     ps::Finalize();
     if (server_) {
       delete server_;
     }
+    std::cout << "deleted server \n";
     server_ = nullptr;
   }
 
