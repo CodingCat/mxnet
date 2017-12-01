@@ -570,11 +570,6 @@ class KVStoreDist : public KVStoreLocal {
   }
 
   /**
-   * \brief cache all key partitions
-   */
-  std::unordered_map<int, PSKV> ps_kv_;
-
-  /**
    * \brief convert to keys in ps
    */
   inline PSKV& EncodeDefaultKey(int key, size_t size, bool is_push) {
