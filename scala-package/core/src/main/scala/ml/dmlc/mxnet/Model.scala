@@ -258,6 +258,7 @@ object Model {
                                       workLoadList: Seq[Float] = Nil,
                                       monitor: Option[Monitor] = None,
                                       symGen: SymbolGenerator = null): Unit = {
+    println(s"training in ${Thread.currentThread().getName}")
     val executorManager = new DataParallelExecutorManager(
         symbol = symbol,
         symGen = symGen,
@@ -276,6 +277,7 @@ object Model {
 
     kvStore.foreach(initializeKVStore(_, executorManager.paramArrays,
       argParams, executorManager.paramNames, updateOnKVStore))
+
     if (updateOnKVStore) {
       kvStore.foreach(_.setOptimizer(optimizer))
     }

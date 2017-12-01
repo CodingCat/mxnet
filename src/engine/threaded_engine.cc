@@ -388,6 +388,7 @@ void ThreadedEngine::WaitForVar(VarHandle var) {
 void ThreadedEngine::WaitForAll() {
   BulkFlush();
   std::unique_lock<std::mutex> lock{finished_m_};
+  std::cout << "waiting for all\t";
   finished_cv_.wait(lock, [this]() {
       return pending_.load() == 0 || kill_.load();
     });

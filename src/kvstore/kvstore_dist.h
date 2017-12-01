@@ -51,11 +51,13 @@ class KVStoreDist : public KVStoreLocal {
   explicit KVStoreDist(bool use_device_comm)
       : KVStoreLocal(use_device_comm), ps_worker_(nullptr), server_(nullptr) {
     if (IsWorkerNode()) {
-      ps_worker_ = new ps::KVWorker<real_t>(0);
-      ps::StartAsync("mxnet\0");
+      int new_customer_id = GetNewCustomerId();
+      ps_worker_ = new ps::KVWorker<real_t>(0, new_customer_id);
+      std::cout << "started kvworker in kvstoredist\n";
+      ps::StartAsync(new_customer_id, "mxnet\0");
       if (!ps::Postoffice::Get()->is_recovery()) {
         ps::Postoffice::Get()->Barrier(
-          ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
+          new_customer_id, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
       }
     }
     bigarray_bound_ = dmlc::GetEnv("MXNET_KVSTORE_BIGARRAY_BOUND", 1000 * 1000);
@@ -63,18 +65,22 @@ class KVStoreDist : public KVStoreLocal {
   }
 
   virtual ~KVStoreDist() {
+    std::cout << "deleting KVStoreDist in "<< IsWorkerNode() << "\n";
     Engine::Get()->WaitForAll();
     if (IsWorkerNode()) {
+      std::cout << "jumped out from KVStoreDist\n";
       if (barrier_before_exit_) {
         Barrier();
-        if (get_rank() == 0) {
+        if (get_rank() == 0 && ps_worker_->get_customer()->customer_id() == 0) {
+          std::cout << "send stop command to server" << "\n";
           // stop the executor at servers
           SendCommandToServers(static_cast<int>(CommandType::kStopServer), "");
         }
       }
-      ps::Finalize(barrier_before_exit_);
+      ps::Finalize(ps_worker_->get_customer()->customer_id(), barrier_before_exit_);
       delete ps_worker_;
     }
+    std::cout << "finished kvstore dist \n";
   }
 
   void set_updater(const Updater& updater) override {
@@ -96,7 +102,9 @@ class KVStoreDist : public KVStoreLocal {
   }
 
   void Barrier() override {
-    ps::Postoffice::Get()->Barrier(ps::kWorkerGroup);
+    ps::Postoffice::Get()->Barrier(
+      ps_worker_->get_customer()->customer_id(),
+      ps::kWorkerGroup);
   }
 
   void SendCommandToServers(int cmd_id,
@@ -121,22 +129,27 @@ class KVStoreDist : public KVStoreLocal {
   }
 
   void RunServer(const Controller& controller) override {
+    std::cout<<"+" << ps::Environment::Get()->find("DMLC_ROLE") << "\n";
     CHECK(!IsWorkerNode());
     if (IsServerNode()) {
+      std::cout<<"this is a server node\n";
       server_ = new KVStoreDistServer();
       server_->set_controller(controller);
+    } else {
+      std::cout<<ps::Environment::Get()->find("DMLC_ROLE") << "\n";
     }
 
-    ps::StartAsync("mxnet_server\0");
+    ps::StartAsync(0, "mxnet_server\0");
     if (!ps::Postoffice::Get()->is_recovery()) {
       ps::Postoffice::Get()->Barrier(
-        ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
+        0, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
     }
     if (server_) server_->Run();
-    ps::Finalize();
+    ps::Finalize(0, true);
     if (server_) {
       delete server_;
     }
+    std::cout << "deleted server \n";
     server_ = nullptr;
   }
 
@@ -173,22 +186,56 @@ class KVStoreDist : public KVStoreLocal {
    */
   std::mutex mu_;
 
+  // initialized keys
+  static std::unordered_set<int> initialized_keys;
+
+  static std::mutex init_mutex;
+
   void InitImpl(const std::vector<int>& keys,
                 const std::vector<NDArray>& values) override {
     CheckUnique(keys);
     for (size_t i = 0; i < keys.size(); ++i) {
       comm_->Init(keys[i], values[i].storage_type(), values[i].shape(), values[i].dtype());
     }
-    if (get_rank() == 0) {
+    int customer_id = ps_worker_->obj_->customer_id();
+    if (customer_id == 0) {
+      std::cout << "update keys since customer_id is " << customer_id << "\n";
       Push_(keys, values, 0, false);
       // wait until the push is finished
       for (const int key : keys) {
         comm_buf_[key].WaitToWrite();
         compr_buf_[key].WaitToWrite();
       }
-    } else {
-      // do nothing
     }
+    /*
+    if (init_mutex.try_lock()) {
+      CheckUnique(keys);
+      std::vector<int> uninitialized_keys;
+      std::vector<NDArray> uninitialized_values;
+      for (size_t i = 0; i < keys.size(); i++) {
+        if (initialized_keys.find(keys[i]) == initialized_keys.end()) {
+          uninitialized_keys.push_back(keys[i]);
+          uninitialized_values.push_back(values[i]);
+        }
+      }
+      for (size_t i = 0; i < uninitialized_keys.size(); ++i) {
+        comm_->Init(uninitialized_keys[i], uninitialized_values[i].storage_type(), \
+       uninitialized_values[i].shape(), uninitialized_values[i].dtype());
+      }
+      std::cout << "uninitialized keys length " << uninitialized_keys.size() << "\n";
+      if (uninitialized_keys.size() > 0) {
+        Push_(uninitialized_keys, uninitialized_values, 0, false);
+        std::cout << "pushed and waiting \n";
+        // wait until the push is finished
+        for (const auto &v : uninitialized_values) {
+          v.WaitToWrite();
+        }
+        initialized_keys.insert(uninitialized_keys.begin(), uninitialized_keys.end());
+        std::cout << "updated initialized_keys\n";
+      }
+      init_mutex.unlock();
+    }
+    */
     if (!ps::Postoffice::Get()->is_recovery()) {
       Barrier();
     }
@@ -514,6 +561,12 @@ class KVStoreDist : public KVStoreLocal {
     auto last = std::unique(keys_copy.begin(), keys_copy.end());
     CHECK_EQ(static_cast<size_t>(std::distance(keys_copy.begin(), last)),
              static_cast<size_t>(keys.size()));
+  }
+
+  static std::atomic<int> customer_id;
+
+  int GetNewCustomerId() {
+    return customer_id++;
   }
 
   /**

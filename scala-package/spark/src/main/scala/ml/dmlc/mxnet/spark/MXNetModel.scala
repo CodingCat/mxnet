@@ -22,10 +22,6 @@ import ml.dmlc.mxnet.{FeedForward, NDArray, Shape}
 import org.apache.spark.SparkContext
 import org.apache.spark.mllib.linalg.Vector
 
-/**
- * Wrapper for [[ml.dmlc.mxnet.Model]] which used in Spark application
- * @author Yizhi Liu
- */
 class MXNetModel private[mxnet](
     @transient private var model: FeedForward,
     private val dimension: Shape,

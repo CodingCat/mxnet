@@ -17,13 +17,12 @@
 
 package ml.dmlc.mxnet.spark
 
-import java.io.{IOException, InputStream, OutputStream}
+import java.io._
 import java.util.concurrent.atomic.AtomicReference
 
 import ml.dmlc.mxnet.KVStoreServer
-import org.kohsuke.args4j.{Option, CmdLineParser}
-import org.slf4j.{LoggerFactory, Logger}
-
+import org.kohsuke.args4j.{CmdLineParser, Option}
+import org.slf4j.{Logger, LoggerFactory}
 import scala.collection.mutable
 import scala.collection.JavaConverters._
 
@@ -110,6 +109,16 @@ class ParameterServer(
 
     setDaemon(true)
     override def run() {
+      val bb = new BufferedReader(new InputStreamReader(in))
+      var line: String = bb.readLine()
+      while (line != null) {
+        // scalastyle:off
+        println(line)
+        line = bb.readLine()
+        // scalastyle:on
+      }
+      in.close()
+      /*
       val buf = new Array[Byte](1024)
       var len = in.read(buf)
       while (len != -1) {
@@ -120,6 +129,7 @@ class ParameterServer(
       if (propagateEof) {
         out.close()
       }
+      */
     }
   }
 

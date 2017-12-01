@@ -28,6 +28,8 @@
 #include "./kvstore_local.h"
 #if MXNET_USE_DIST_KVSTORE
 #include "./kvstore_dist.h"
+
+std::atomic<int> mxnet::kvstore::KVStoreDist::customer_id{0};
 #endif  // MXNET_USE_DIST_KVSTORE
 #if MXNET_USE_NCCL
 #include "./kvstore_nccl.h"
@@ -50,8 +52,10 @@ KVStore* KVStore::Create(const char *type_name) {
   if (has("dist")) {
 #if MXNET_USE_DIST_KVSTORE
     kv = new kvstore::KVStoreDist(use_device_comm);
+    std::cout << "create kvstoredist\n";
     if (!has("_async") && kv->IsWorkerNode() && kv->get_rank() == 0) {
       // configure the server to be the sync mode
+      std::cout << "sending data to servers\n";
       kv->SendCommandToServers(static_cast<int>(kvstore::CommandType::kSyncMode), "");
     }
 #else
