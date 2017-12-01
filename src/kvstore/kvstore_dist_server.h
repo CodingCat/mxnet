@@ -476,8 +476,6 @@ class KVStoreDistServer {
       NDArray recved = NDArray(recv_blob, 0);
       if (stored.is_none()) {
         // initialization
-        std::cout << "initialized " << key << " from customer " << \
-          req_meta.customer_id << "\n";
         stored = NDArray(dshape, Context());
         CopyFromTo(recved, &stored, 0);
         server->Response(req_meta);

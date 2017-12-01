@@ -77,7 +77,7 @@ class KVStoreDist : public KVStoreLocal {
           SendCommandToServers(static_cast<int>(CommandType::kStopServer), "");
         }
       }
-      ps::Finalize(barrier_before_exit_);
+      ps::Finalize(ps_worker_->get_customer()->customer_id(), barrier_before_exit_);
       delete ps_worker_;
     }
     std::cout << "finished kvstore dist \n";
@@ -145,7 +145,7 @@ class KVStoreDist : public KVStoreLocal {
         0, ps::kWorkerGroup + ps::kServerGroup + ps::kScheduler);
     }
     if (server_) server_->Run();
-    ps::Finalize();
+    ps::Finalize(0, true);
     if (server_) {
       delete server_;
     }

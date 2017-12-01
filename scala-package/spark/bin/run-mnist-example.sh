@@ -58,7 +58,7 @@ RUN_OPTS+=" --output ./"
 # They will be uploaded and distributed to each node automatically.
 RUN_OPTS+=" --jars $SCALA_JAR,$SPARK_JAR"
 RUN_OPTS+=" --num-server 1"
-RUN_OPTS+=" --num-worker 1"
+RUN_OPTS+=" --num-worker 2"
 RUN_OPTS+=" --java $JAVA_HOME/bin/java"
 RUN_OPTS+=" --model mlp"
 RUN_OPTS+=" --cpus 0,1"
