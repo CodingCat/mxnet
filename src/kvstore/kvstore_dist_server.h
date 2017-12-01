@@ -505,17 +505,7 @@ class KVStoreDistServer {
         stored.WaitToRead();
       }
     } else {
-      // pull
-      ps::KVPairs<real_t> response;
-      std::cout << "pull request of " << key << " from customer " << \
-          req_meta.customer_id << "\n";
-      CHECK(!stored.is_none()) << "init " << key << " first";
-      auto len = stored.shape().Size();
-      response.keys = req_data.keys;
-      response.lens = {len};
-      // TODO(mli) try to remove this CopyFrom
-      response.vals.CopyFrom(static_cast<const float*>(stored.data().dptr_), len);
-      server->Response(req_meta, response);
+      DefaultStorageResponse(key, stored, req_meta, req_data, server);
     }
   }
 
