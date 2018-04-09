@@ -45,8 +45,10 @@ class KVStoreDist : public KVStoreLocal {
  public:
   explicit KVStoreDist(bool use_device_comm)
       : KVStoreLocal(use_device_comm), ps_worker_(nullptr), server_(nullptr) {
+    std::cout << "IsWorkerNode: " << IsWorkerNode() << "\n";
     if (IsWorkerNode()) {
       int new_customer_id = GetNewCustomerId();
+      std::cout << "new_customer_id " << new_customer_id << "\n";
       ps_worker_ = new ps::KVWorker<real_t>(0, new_customer_id);
       ps::StartAsync(new_customer_id, "mxnet\0");
       if (!ps::Postoffice::Get()->is_recovery()) {
