@@ -706,12 +706,42 @@ inline bool SliceOpShape(const nnvm::NodeAttrs& attrs,
   return oshape.ndim() != 0 && oshape.Size() != 0;
 }
 
-template<int ndim>
-struct slice_forward {
+template<int ndim, int req, typename xpu>
+struct slice_forward;
+
+template<int ndim, int req>
+struct slice_forward<ndim, req, gpu> {
   // i is the i-th row after flattening out into 2D tensor
   template<typename DType>
   MSHADOW_XINLINE static void Map(int i, DType* out, const DType* data,
-                                  const OpReqType req,
+                                  const mshadow::Shape<ndim> dshape,
+                                  const mshadow::Shape<ndim> oshape,
+                                  const common::StaticArray<int, ndim> begin,
+                                  const common::StaticArray<int, ndim> step) {
+    const int data_last_dim_size = dshape[ndim-1];
+    const int out_last_dim_size = oshape[ndim-1];
+    const int step_last_dim = step[ndim-1];
+    const int begin_last_dim = begin[ndim-1];
+    const int j = i % out_last_dim_size;
+    int irow = 0;  // row id of flattend 2D data
+    int stride = 1;
+    int idx = i / out_last_dim_size;
+    #pragma unroll
+    for (int k = ndim - 2; k >= 0; --k) {
+      irow += stride * ((idx % oshape[k]) * step[k] + begin[k]);
+      idx /= oshape[k];
+      stride *= dshape[k];
+    }
+    KERNEL_ASSIGN(out[i], req,
+                  data[irow * data_last_dim_size + j * step_last_dim + begin_last_dim]);
+  }
+};
+
+template<int ndim, int req>
+struct slice_forward<ndim, req, cpu> {
+  // i is the i-th row after flattening out into 2D tensor
+  template<typename DType>
+  MSHADOW_XINLINE static void Map(int i, DType* out, const DType* data,
                                   const mshadow::Shape<ndim> dshape,
                                   const mshadow::Shape<ndim> oshape,
                                   const common::StaticArray<int, ndim> begin,
@@ -756,19 +786,27 @@ void SliceOpForward(const nnvm::NodeAttrs& attrs,
     common::StaticArray<int, ndim> begin, end, step;
     GetIndexRange(data.shape_, param.begin, param.end, param.step, &begin, &end, &step);
     MSHADOW_TYPE_SWITCH(out.type_flag_, DType, {
-      mxnet_op::Kernel<slice_forward<ndim>, xpu>::Launch(s, out.shape_.FlatTo2D()[0],
-          out.dptr<DType>(), data.dptr<DType>(), req[0],
-          data.shape_.get<ndim>(), out.shape_.get<ndim>(), begin, step);
+      MXNET_ASSIGN_REQ_SWITCH(req[0], Req, {
+        int num_threads = out.shape_.FlatTo2D()[0];
+        if (std::is_same<xpu, gpu>::value) {
+          num_threads *= out.shape_.get<ndim>()[ndim - 1];
+        }
+        mxnet_op::Kernel<slice_forward<ndim, Req, xpu>, xpu>::Launch(s, num_threads,
+            out.dptr<DType>(), data.dptr<DType>(),
+            data.shape_.get<ndim>(), out.shape_.get<ndim>(), begin, step);
+      })
     })
   })
 }
 
-template<int ndim>
-struct slice_assign {
+template<int ndim, int req, typename xpu>
+struct slice_assign;
+
+template<int ndim, int req>
+struct slice_assign<ndim, req, cpu> {
   // i is the i-th row after flattening out into 2D tensor
   template<typename DType>
   MSHADOW_XINLINE static void Map(int i, DType* out, const DType* val,
-                                  const OpReqType req,
                                   const mshadow::Shape<ndim> oshape,
                                   const mshadow::Shape<ndim> vshape,
                                   const common::StaticArray<int, ndim> begin,
@@ -791,6 +829,34 @@ struct slice_assign {
       KERNEL_ASSIGN(out[irow * data_last_dim_size + j * step_last_dim + begin_last_dim],
                     req, val[offset++]);
     }
+  }
+};
+
+template<int ndim, int req>
+struct slice_assign<ndim, req, gpu> {
+  // i is the i-th row after flattening out into 2D tensor
+  template<typename DType>
+  MSHADOW_XINLINE static void Map(int i, DType* out, const DType* val,
+                                  const mshadow::Shape<ndim> oshape,
+                                  const mshadow::Shape<ndim> vshape,
+                                  const common::StaticArray<int, ndim> begin,
+                                  const common::StaticArray<int, ndim> step) {
+    const int data_last_dim_size = oshape[ndim-1];
+    const int out_last_dim_size = vshape[ndim-1];
+    const int step_last_dim = step[ndim-1];
+    const int begin_last_dim = begin[ndim-1];
+    const int j = i % out_last_dim_size;
+    int irow = 0;  // row id of flattend 2D out
+    int stride = 1;
+    int idx = i / out_last_dim_size;
+    #pragma unroll
+    for (int k = ndim - 2; k >= 0; --k) {
+      irow += stride * ((idx % vshape[k]) * step[k] + begin[k]);
+      idx /= vshape[k];
+      stride *= oshape[k];
+    }
+    KERNEL_ASSIGN(out[irow * data_last_dim_size + j * step_last_dim + begin_last_dim],
+                  req, val[i]);
   }
 };
 
@@ -818,9 +884,15 @@ void SliceOpBackward(const nnvm::NodeAttrs& attrs,
     common::StaticArray<int, ndim> begin, end, step;
     GetIndexRange(igrad.shape_, param.begin, param.end, param.step, &begin, &end, &step);
     MSHADOW_TYPE_SWITCH(ograd.type_flag_, DType, {
-      mxnet_op::Kernel<slice_assign<ndim>, xpu>::Launch(s, ograd.shape_.FlatTo2D()[0],
-          igrad.dptr<DType>(), ograd.dptr<DType>(), req[0],
+      MXNET_ASSIGN_REQ_SWITCH(req[0], Req, {
+      int num_threads = ograd.shape_.FlatTo2D()[0];
+      if (std::is_same<xpu, gpu>::value) {
+        num_threads *= ograd.shape_.get<ndim>()[ndim - 1];
+      }
+      mxnet_op::Kernel<slice_assign<ndim, Req, xpu>, xpu>::Launch(s, num_threads,
+          igrad.dptr<DType>(), ograd.dptr<DType>(),
           igrad.shape_.get<ndim>(), ograd.shape_.get<ndim>(), begin, step);
+      })
     })
   })
 }
@@ -876,9 +948,15 @@ void SliceAssignOpForward(const nnvm::NodeAttrs& attrs,
     common::StaticArray<int, ndim> begin, end, step;
     GetIndexRange(data.shape_, param.begin, param.end, param.step, &begin, &end, &step);
     MSHADOW_TYPE_SWITCH(out.type_flag_, DType, {
-      mxnet_op::Kernel<slice_assign<ndim>, xpu>::Launch(s, val.shape_.FlatTo2D()[0],
-          out.dptr<DType>(), val.dptr<DType>(), req[0],
-          out.shape_.get<ndim>(), val.shape_.get<ndim>(), begin, step);
+      MXNET_ASSIGN_REQ_SWITCH(req[0], Req, {
+        int num_threads = val.shape_.FlatTo2D()[0];
+        if (std::is_same<xpu, gpu>::value) {
+          num_threads *= val.shape_.get<ndim>()[ndim - 1];
+        }
+        mxnet_op::Kernel<slice_assign<ndim, Req, xpu>, xpu>::Launch(s, num_threads,
+            out.dptr<DType>(), val.dptr<DType>(),
+            out.shape_.get<ndim>(), val.shape_.get<ndim>(), begin, step);
+      })
     })
   })
 }
@@ -1127,6 +1205,178 @@ void SliceAxisGrad_(const nnvm::NodeAttrs& attrs,
         }
       });
   }
+}
+
+struct SliceLikeParam : public dmlc::Parameter<SliceLikeParam> {
+  TShape axes;
+  DMLC_DECLARE_PARAMETER(SliceLikeParam) {
+    DMLC_DECLARE_FIELD(axes).set_default(TShape())
+    .describe("List of axes on which input data will be sliced according to the "
+              "corresponding size of the second input. By default will slice on "
+              "all axes. Negative axes are supported.");
+  }
+};
+
+inline bool SliceLikeShape(const nnvm::NodeAttrs& attrs,
+                           std::vector<TShape> *in_attrs,
+                           std::vector<TShape> *out_attrs) {
+  const SliceLikeParam& param = nnvm::get<SliceLikeParam>(attrs.parsed);
+  CHECK_EQ(in_attrs->size(), 2U);
+  CHECK_EQ(out_attrs->size(), 1U);
+  TShape& ishape = (*in_attrs)[0];
+  TShape& from_shape = (*in_attrs)[1];
+  if (param.axes.ndim() == 0) {
+    CHECK_EQ(ishape.ndim(), from_shape.ndim())
+      << "By default slice_axis performs slice on all axes, but ndim mismatch "
+         "for inputs: " << ishape.ndim() << " vs. " << from_shape.ndim();
+    for (index_t i = 0; i < ishape.ndim(); ++i) {
+      CHECK_GE(ishape[i], from_shape[i])
+        << "Slice axis " << i << " with size " << from_shape[i]
+        << "exceeds limit of input with size " << ishape[i];
+    }
+    SHAPE_ASSIGN_CHECK(*out_attrs, 0, from_shape);
+  } else {
+    TShape shape(ishape);
+    for (index_t i = 0; i < param.axes.ndim(); ++i) {
+      int axis = static_cast<int>(param.axes[i]);
+      if (axis < 0) {
+        axis += static_cast<int>(ishape.ndim());
+      }
+      CHECK_GE(axis, 0)
+        << "Slice axis: " << static_cast<int>(param.axes[i]) << " too small";
+      CHECK_GT(ishape.ndim(), axis)
+        << "Slice axis: " << axis << " exceeds first input: " << ishape.ndim();
+      CHECK_GT(from_shape.ndim(), axis)
+        << "Slice axis: " << axis << " exceeds second input: " << from_shape.ndim();
+      shape[axis] = from_shape[axis];
+      CHECK_GE(ishape[axis], from_shape[axis])
+        << "Slice axis " << axis << " with size " << from_shape[axis]
+        << "exceeds limit of input with size " << ishape[axis];
+    }
+    SHAPE_ASSIGN_CHECK(*out_attrs, 0, shape);
+  }
+  return true;
+}
+
+inline void SliceLikeInferRanges(const TShape& dshape,
+                                 const TShape& fshape,
+                                 const TShape& axes,
+                                 nnvm::Tuple<dmlc::optional<int>>* param_begin,
+                                 nnvm::Tuple<dmlc::optional<int>>* param_end,
+                                 nnvm::Tuple<dmlc::optional<int>>* param_step) {
+  std::vector<dmlc::optional<int>> pb(dshape.ndim());
+  std::vector<dmlc::optional<int>> pe(dshape.ndim());
+  std::vector<dmlc::optional<int>> ps(dshape.ndim());
+  if (axes.ndim() == 0) {
+    for (index_t i = 0; i < dshape.ndim(); ++i) {
+      pb[i] = 0;
+      pe[i] = fshape[i];
+      ps[i] = 1;
+    }
+  } else {
+    for (index_t i = 0; i < axes.ndim(); ++i) {
+      int axis = static_cast<int>(axes[i]);
+      if (axis < 0) {
+        axis += static_cast<int>(dshape.ndim());
+      }
+      CHECK_GE(axis, 0)
+        << "Slice axis: " << static_cast<int>(axes[i]) << " too small";
+      CHECK_LT(axis, static_cast<int>(dshape.ndim()))
+        << "Slice axis: " << axis << " exceeds first input: " << dshape.ndim();
+      CHECK_LT(axis, static_cast<int>(fshape.ndim()))
+        << "Slice axis: " << axis << " exceeds first input: " << fshape.ndim();
+      pb[axis] = 0;
+      pe[axis] = fshape[axis];
+      ps[axis] = 1;
+    }
+  }
+  *param_begin = nnvm::Tuple<dmlc::optional<int>>(pb.begin(), pb.end());
+  *param_end = nnvm::Tuple<dmlc::optional<int>>(pe.begin(), pe.end());
+  *param_step = nnvm::Tuple<dmlc::optional<int>>(ps.begin(), ps.end());
+}
+
+template<typename xpu>
+void SliceLikeForward(const nnvm::NodeAttrs& attrs,
+                      const OpContext& ctx,
+                      const std::vector<TBlob>& inputs,
+                      const std::vector<OpReqType>& req,
+                      const std::vector<TBlob>& outputs) {
+  CHECK_EQ(inputs.size(), 2U);
+  CHECK_EQ(outputs.size(), 1U);
+  CHECK_EQ(req.size(), 1U);
+  using namespace mshadow::expr;
+  const SliceLikeParam& param = nnvm::get<SliceLikeParam>(attrs.parsed);
+  mshadow::Stream<xpu> *s = ctx.get_stream<xpu>();
+  const TBlob& data = inputs[0];
+  const TBlob& out = outputs[0];
+  const TShape& ishape = data.shape_;
+  const TShape& from_shape = inputs[1].shape_;
+  nnvm::Tuple<dmlc::optional<int>> param_begin;
+  nnvm::Tuple<dmlc::optional<int>> param_end;
+  nnvm::Tuple<dmlc::optional<int>> param_step;
+  SliceLikeInferRanges(ishape, from_shape, param.axes, &param_begin, &param_end, &param_step);
+
+  MXNET_NDIM_SWITCH(data.ndim(), ndim, {
+    common::StaticArray<int, ndim> begin, end, step;
+    GetIndexRange(data.shape_, param_begin, param_end, param_step, &begin, &end, &step);
+    MSHADOW_TYPE_SWITCH(out.type_flag_, DType, {
+      MXNET_ASSIGN_REQ_SWITCH(req[0], Req, {
+        int num_threads = out.shape_.FlatTo2D()[0];
+        if (std::is_same<xpu, gpu>::value) {
+          num_threads *= out.shape_.get<ndim>()[ndim - 1];
+        }
+        mxnet_op::Kernel<slice_forward<ndim, Req, xpu>, xpu>::Launch(s,
+            num_threads, out.dptr<DType>(), data.dptr<DType>(),
+            data.shape_.get<ndim>(), out.shape_.get<ndim>(), begin, step);
+      })
+    })
+  })
+}
+
+template<typename xpu>
+void SliceLikeBackward(const nnvm::NodeAttrs& attrs,
+                       const OpContext& ctx,
+                       const std::vector<TBlob>& inputs,
+                       const std::vector<OpReqType>& req,
+                       const std::vector<TBlob>& outputs) {
+  CHECK_EQ(inputs.size(), 1U);
+  CHECK_EQ(outputs.size(), 2U);
+  CHECK_EQ(req.size(), 2U);
+  if (req[0] == kNullOp) return;
+  using namespace mshadow;
+  Stream<xpu>* s = ctx.get_stream<xpu>();
+  const TBlob& ograd = inputs[0];
+  const TBlob& igrad = outputs[0];
+  const SliceLikeParam& param = nnvm::get<SliceLikeParam>(attrs.parsed);
+  Fill(s, outputs[1], req[1], 0);  // Second input not relavant to gradients.
+  if (req[0] == kWriteTo) {
+    Fill(s, igrad, req[0], 0);
+  } else if (req[0] == kWriteInplace) {
+    LOG(FATAL) << "_slice_like_backward does not support kWriteInplace";
+  }
+
+  const TShape& ishape = ograd.shape_;
+  const TShape& from_shape = outputs[1].shape_;
+  nnvm::Tuple<dmlc::optional<int>> param_begin;
+  nnvm::Tuple<dmlc::optional<int>> param_end;
+  nnvm::Tuple<dmlc::optional<int>> param_step;
+  SliceLikeInferRanges(ishape, from_shape, param.axes, &param_begin, &param_end, &param_step);
+
+  MXNET_NDIM_SWITCH(ograd.ndim(), ndim, {
+    common::StaticArray<int, ndim> begin, end, step;
+    GetIndexRange(ograd.shape_, param_begin, param_end, param_step, &begin, &end, &step);
+    MSHADOW_TYPE_SWITCH(ograd.type_flag_, DType, {
+      MXNET_ASSIGN_REQ_SWITCH(req[0], Req, {
+        int num_threads = ograd.shape_.FlatTo2D()[0];
+        if (std::is_same<xpu, gpu>::value) {
+          num_threads *= ograd.shape_.get<ndim>()[ndim - 1];
+        }
+        mxnet_op::Kernel<slice_assign<ndim, Req, xpu>, xpu>::Launch(s, num_threads,
+            igrad.dptr<DType>(), ograd.dptr<DType>(),
+            igrad.shape_.get<ndim>(), ograd.shape_.get<ndim>(), begin, step);
+      })
+    })
+  })
 }
 
 struct ClipParam : public dmlc::Parameter<ClipParam> {
@@ -1442,7 +1692,8 @@ struct TileParam : public dmlc::Parameter<TileParam> {
   TShape reps;
   DMLC_DECLARE_PARAMETER(TileParam) {
     DMLC_DECLARE_FIELD(reps)
-      .describe("The number of times for repeating the tensor a."
+      .describe("The number of times for repeating the tensor a. Each dim size of reps"
+                " must be a positive integer."
                 " If reps has length d, the result will have dimension of max(d, a.ndim);"
                 " If a.ndim < d, a is promoted to be d-dimensional by prepending new axes."
                 " If a.ndim > d, reps is promoted to a.ndim by pre-pending 1's to it.");
@@ -1461,6 +1712,9 @@ inline bool TileOpShape(const nnvm::NodeAttrs& attrs,
   if (reps.ndim() == 0 || ishape.ndim() == 0) {
     SHAPE_ASSIGN_CHECK(*out_attrs, 0, ishape);
     return true;
+  }
+  for (size_t i = 0; i < reps.ndim(); ++i) {
+    CHECK_GT(reps[i], 0) << "invalid reps=" << i << ", dim size must be greater than zero";
   }
   TShape oshape(std::max(ishape.ndim(), reps.ndim()));
   int i1 = static_cast<int>(ishape.ndim()) - 1;

@@ -42,10 +42,11 @@ DMLC_REGISTER_PARAMETER(AdagradParam);
 
 NNVM_REGISTER_OP(signsgd_update)
 .describe(R"code(Update function for SignSGD optimizer.
+
 .. math::
 
  g_t = \nabla J(W_{t-1})\\
- W_t = W_{t-1} - \eta_t \text{sign}(g_t)}
+ W_t = W_{t-1} - \eta_t \text{sign}(g_t)
 
 It updates the weights using::
 
@@ -72,7 +73,7 @@ NNVM_REGISTER_OP(signum_update)
 
  g_t = \nabla J(W_{t-1})\\
  m_t = \beta m_{t-1} + (1 - \beta) g_t\\
- W_t = W_{t-1} - \eta_t \text{sign}(m_t)}
+ W_t = W_{t-1} - \eta_t \text{sign}(m_t)
 
 It updates the weights using::
  state = momentum * state + (1-momentum) * gradient
@@ -131,6 +132,10 @@ struct SGDMomStdDnsRspDnsKernel<req, cpu> {
   }
 };
 
+/*
+ * \brief standard momentum update for dense weight on cpu.
+ *        state is expected to be dense, while grad is expected to be row_sparse.
+ */
 template<>
 void SGDMomStdUpdateDnsRspDnsImpl<cpu>(const SGDMomParam& param,
                                        const OpContext& ctx,
@@ -151,12 +156,12 @@ void SGDMomStdUpdateDnsRspDnsImpl<cpu>(const SGDMomParam& param,
     MSHADOW_IDX_TYPE_SWITCH(grad.aux_type(kIdx), IType, {
       MXNET_ASSIGN_REQ_SWITCH(req, req_type, {
         DType* weight_data = weight.dptr<DType>();
-        IType* grad_idx = grad.aux_data(kIdx).dptr<IType>();
-        DType* grad_val = grad.data().dptr<DType>();
+        const IType* grad_idx = grad.aux_data(kIdx).dptr<IType>();
+        const DType* grad_val = grad.data().dptr<DType>();
         DType* mom_data = mom.dptr<DType>();
         DType* out_data = out->dptr<DType>();
-        nnvm::dim_t num_rows = weight.shape_[0];
-        auto row_length = weight.shape_.ProdShape(1, weight.ndim());
+        const nnvm::dim_t num_rows = weight.shape_[0];
+        const auto row_length = weight.shape_.ProdShape(1, weight.ndim());
         Tensor<cpu, 1, char> workspace = ctx.requested[0]
           .get_space_typed<cpu, 1, char>(Shape1(num_rows * sizeof(nnvm::dim_t)), s);
 
@@ -274,6 +279,40 @@ void AdamStdUpdateDnsRspDnsImpl<cpu>(const AdamParam& param,
   });
 }
 
+/*!
+ * \brief Storge type inference function for SGD.
+ */
+inline bool SGDStorageType(const nnvm::NodeAttrs& attrs,
+                           const int dev_mask,
+                           DispatchMode* dispatch_mode,
+                           std::vector<int>* in_attrs,
+                           std::vector<int>* out_attrs) {
+  using namespace common;
+  const SGDParam& param = nnvm::get<SGDParam>(attrs.parsed);
+  CHECK_EQ(in_attrs->size(), 2U);
+  CHECK_EQ(out_attrs->size(), 1U);
+  const int weight_stype = in_attrs->at(0);
+  const int grad_stype = in_attrs->at(1);
+  bool dispatched = false;
+  if (!dispatched && ContainsOnlyStorage(*in_attrs, kDefaultStorage)) {
+    // dns, ... -> dns
+    dispatched = storage_type_assign(out_attrs, kDefaultStorage,
+                                     dispatch_mode, DispatchMode::kFCompute);
+  }
+  if (!dispatched && grad_stype == kRowSparseStorage &&
+      (weight_stype == kRowSparseStorage || weight_stype == kDefaultStorage)) {
+    // grad's stype = rsp
+    dispatched = storage_type_assign(out_attrs, static_cast<NDArrayStorageType>(weight_stype),
+                                     dispatch_mode, DispatchMode::kFComputeEx);
+    // warn users if lazy_update is turned on
+    if (dispatched && param.wd != 0 && param.lazy_update) LogLazyUpdate();
+  }
+  if (!dispatched) {
+    dispatched = dispatch_fallback(out_attrs, dispatch_mode);
+  }
+  return dispatched;
+}
+
 
 NNVM_REGISTER_OP(sgd_update)
 MXNET_ADD_SPARSE_OP_ALIAS(sgd_update)
@@ -281,13 +320,13 @@ MXNET_ADD_SPARSE_OP_ALIAS(sgd_update)
 
 It updates the weights using::
 
- weight = weight - learning_rate * gradient
+ weight = weight - learning_rate * (gradient + wd * weight)
 
-If weight is of ``row_sparse`` storage type,
+However, if gradient is of ``row_sparse`` storage type and ``lazy_update`` is True,
 only the row slices whose indices appear in grad.indices are updated::
 
  for row in gradient.indices:
-     weight[row] = weight[row] - learning_rate * gradient[row]
+     weight[row] = weight[row] - learning_rate * (gradient[row] + wd * weight[row])
 
 )code" ADD_FILELINE)
 .set_num_inputs(2)
@@ -295,7 +334,7 @@ only the row slices whose indices appear in grad.indices are updated::
 .set_attr_parser(ParamParser<SGDParam>)
 .set_attr<nnvm::FInferShape>("FInferShape", ElemwiseShape<2, 1>)
 .set_attr<nnvm::FInferType>("FInferType", ElemwiseType<2, 1>)
-.set_attr<FInferStorageType>("FInferStorageType", ElemwiseStorageType<2, 1, false, true, false>)
+.set_attr<FInferStorageType>("FInferStorageType", SGDStorageType)
 .set_attr<FCompute>("FCompute<cpu>", SGDUpdate<cpu>)
 .set_attr<FComputeEx>("FComputeEx<cpu>", SGDUpdateEx<cpu>)
 .add_argument("weight", "NDArray-or-Symbol", "Weight")
@@ -304,7 +343,7 @@ only the row slices whose indices appear in grad.indices are updated::
 
 NNVM_REGISTER_OP(sgd_mom_update)
 MXNET_ADD_SPARSE_OP_ALIAS(sgd_mom_update)
-.describe(R"code(Momentum update function for Stochastic Gradient Descent (SDG) optimizer.
+.describe(R"code(Momentum update function for Stochastic Gradient Descent (SGD) optimizer.
 
 Momentum update has better convergence rates on neural networks. Mathematically it looks
 like below:
@@ -322,10 +361,8 @@ It updates the weights using::
 
 Where the parameter ``momentum`` is the decay rate of momentum estimates at each epoch.
 
-If weight and grad are both of ``row_sparse`` storage type and momentum is of ``default`` storage type,
-standard update is applied.
-
-If weight, grad and momentum are all of ``row_sparse`` storage type,
+However, if grad's storage type is ``row_sparse``, ``lazy_update`` is True and weight's storage
+type is the same as momentum's storage type,
 only the row slices whose indices appear in grad.indices are updated (for both weight and momentum)::
 
   for row in gradient.indices:
@@ -338,14 +375,18 @@ only the row slices whose indices appear in grad.indices are updated (for both w
 .set_attr_parser(ParamParser<SGDMomParam>)
 .set_attr<nnvm::FInferShape>("FInferShape", ElemwiseShape<3, 1>)
 .set_attr<nnvm::FInferType>("FInferType", ElemwiseType<3, 1>)
-.set_attr<FInferStorageType>("FInferStorageType", StdOptStorageType<2, 1>)
+.set_attr<FInferStorageType>("FInferStorageType", StdOptStorageType<1, SGDMomParam>)
 .set_attr<nnvm::FMutateInputs>("FMutateInputs",
   [](const nnvm::NodeAttrs& attrs) {
     return std::vector<uint32_t>{2};
   })
-.set_attr<FResourceRequest>("FResourceRequest",
-  [](const NodeAttrs& attrs) {
-    return std::vector<ResourceRequest>{ResourceRequest::kTempSpace};
+.set_attr<FResourceRequestEx>("FResourceRequestEx",
+  [](const NodeAttrs& attrs, const int dev_mask, const DispatchMode dispatch_mode) {
+    std::vector<ResourceRequest> request;
+    if (dispatch_mode == DispatchMode::kFComputeEx) {
+      request.push_back(ResourceRequest::kTempSpace);
+    }
+    return request;
   })
 .set_attr<FCompute>("FCompute<cpu>", SGDMomUpdate<cpu>)
 .set_attr<FComputeEx>("FComputeEx<cpu>", SGDMomUpdateEx<cpu>)
@@ -398,7 +439,7 @@ available at http://proceedings.mlr.press/v70/zheng17a/zheng17a.pdf.
 
  g_t = \nabla J(W_{t-1})\\
  v_t = \beta_2 v_{t-1} + (1 - \beta_2) g_t^2\\
- d_t = \frac{ (1 - \beta_1^t) }{ \eta_t } (\sqrt{ \frac{ v_t }{ 1 - \beta_2^t } } + \epsilon)
+ d_t = \frac{ 1 - \beta_1^t }{ \eta_t } (\sqrt{ \frac{ v_t }{ 1 - \beta_2^t } } + \epsilon)
  \sigma_t = d_t - \beta_1 d_{t-1}
  z_t = \beta_1 z_{ t-1 } + (1 - \beta_1^t) g_t - \sigma_t W_{t-1}
  W_t = - \frac{ z_t }{ d_t }
@@ -419,7 +460,7 @@ available at http://proceedings.mlr.press/v70/zheng17a/zheng17a.pdf.
 .add_argument("d", "NDArray-or-Symbol", "Internal state ``d_t``")
 .add_argument("v", "NDArray-or-Symbol", "Internal state ``v_t``")
 .add_argument("z", "NDArray-or-Symbol", "Internal state ``z_t``")
-.add_arguments(AdamParam::__FIELDS__());
+.add_arguments(FTMLParam::__FIELDS__());
 
 NNVM_REGISTER_OP(adam_update)
 MXNET_ADD_SPARSE_OP_ALIAS(adam_update)
@@ -442,7 +483,8 @@ It updates the weights using::
  v = beta2*v + (1-beta2)*(grad**2)
  w += - learning_rate * m / (sqrt(v) + epsilon)
 
-If w, m and v are all of ``row_sparse`` storage type,
+However, if grad's storage type is ``row_sparse``, ``lazy_update`` is True and the storage
+type of weight is the same as those of m and v,
 only the row slices whose indices appear in grad.indices are updated (for w, m and v)::
 
  for row in grad.indices:
@@ -460,7 +502,7 @@ only the row slices whose indices appear in grad.indices are updated (for w, m a
     return std::vector<ResourceRequest>{ResourceRequest::kTempSpace};
   })
 .set_attr<nnvm::FInferType>("FInferType", ElemwiseType<4, 1>)
-.set_attr<FInferStorageType>("FInferStorageType", StdOptStorageType<2, 2>)
+.set_attr<FInferStorageType>("FInferStorageType", StdOptStorageType<2, AdamParam>)
 .set_attr<nnvm::FMutateInputs>("FMutateInputs",
   [](const nnvm::NodeAttrs& attrs) {
     return std::vector<uint32_t>{2, 3};
